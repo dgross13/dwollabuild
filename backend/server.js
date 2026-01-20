@@ -364,30 +364,49 @@ app.post('/api/customers', async (req, res) => {
 
 /**
  * GET /api/customers
- * List all customers (from local store with fresh status from Dwolla)
+ * List all customers from Dwolla Sandbox
+ *
+ * This fetches ALL customers from the Dwolla API, not just those created
+ * in the current session. This ensures previously created customers
+ * (from past sessions or directly from Dwolla dashboard) appear.
  */
 app.get('/api/customers', async (req, res) => {
   try {
-    // Optionally refresh status from Dwolla for each customer
-    // For performance, we'll return local data but include an option to refresh
-    const includeRefresh = req.query.refresh === 'true';
+    console.log('[Customers] Fetching all customers from Dwolla...');
 
-    if (includeRefresh && customersStore.length > 0) {
-      // Refresh status for all customers from Dwolla
-      for (let i = 0; i < customersStore.length; i++) {
-        try {
-          const details = await dwollaRequest('get', customersStore[i].url);
-          customersStore[i].status = details.body.status;
-        } catch (err) {
-          console.warn('[Customers] Failed to refresh status for:', customersStore[i].id);
-        }
-      }
-    }
+    // DWOLLA API CALL: List all customers
+    // GET https://api-sandbox.dwolla.com/customers
+    const response = await dwollaRequest('get', 'customers?limit=200');
 
-    res.json({ customers: customersStore });
+    const dwollaCustomers = response.body._embedded?.customers || [];
+
+    // Map Dwolla response to our format
+    const customers = dwollaCustomers.map(customer => {
+      const customerUrl = customer._links.self.href;
+      const customerId = customerUrl.split('/').pop();
+
+      return {
+        id: customerId,
+        url: customerUrl,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        email: customer.email,
+        phone: customer.phone || null,
+        type: customer.type || 'personal',
+        status: customer.status,
+        createdAt: customer.created
+      };
+    });
+
+    // Update local store with fetched customers (for duplicate checking on create)
+    customersStore = customers;
+
+    console.log('[Customers] Found', customers.length, 'customers from Dwolla');
+
+    res.json({ customers });
   } catch (error) {
     console.error('[Customers] Error listing customers:', error.message);
-    res.status(500).json({ error: 'Failed to list customers' });
+    res.status(500).json({ error: 'Failed to list customers from Dwolla' });
   }
 });
 
@@ -746,11 +765,18 @@ app.get('/api/me/balance', async (req, res) => {
  * POST /api/transfers
  * Create a transfer (payout) from master account to a customer
  *
- * Validates that both source and destination are eligible for transfers
+ * Validates that:
+ * - Source funding source must be verified
+ * - Destination funding source can be verified OR unverified (if allowUnverified=true)
+ * - Destination customer must be verified
+ * - Amount must be positive
+ *
+ * Per Dwolla documentation, transfers to unverified funding sources are allowed
+ * as long as the customer who owns the funding source is verified.
  */
 app.post('/api/transfers', async (req, res) => {
   try {
-    const { sourceFundingSourceUrl, destinationFundingSourceUrl, amount, currency } = req.body;
+    const { sourceFundingSourceUrl, destinationFundingSourceUrl, amount, currency, allowUnverified } = req.body;
 
     // Validation
     if (!sourceFundingSourceUrl || !destinationFundingSourceUrl || !amount) {
@@ -763,9 +789,9 @@ app.post('/api/transfers', async (req, res) => {
       return res.status(400).json({ error: 'Amount must be greater than 0' });
     }
 
-    console.log('[Transfers] Creating transfer:', amount, currency || 'USD');
+    console.log('[Transfers] Creating transfer:', amount, currency || 'USD', 'allowUnverified:', allowUnverified);
 
-    // Validate source funding source
+    // Validate source funding source - must always be verified
     try {
       const sourceFs = await dwollaRequest('get', sourceFundingSourceUrl);
       if (sourceFs.body.status !== 'verified') {
@@ -780,10 +806,33 @@ app.post('/api/transfers', async (req, res) => {
     // Validate destination funding source
     try {
       const destFs = await dwollaRequest('get', destinationFundingSourceUrl);
-      if (destFs.body.status !== 'verified') {
-        return res.status(400).json({
-          error: 'Destination funding source is not verified. Only verified funding sources can receive transfers.'
-        });
+      const destFsStatus = destFs.body.status;
+
+      if (destFsStatus !== 'verified') {
+        if (!allowUnverified) {
+          return res.status(400).json({
+            error: 'Destination funding source is not verified. Enable "Allow unverified" to send to unverified funding sources.'
+          });
+        }
+
+        // If allowing unverified, verify the customer who owns this funding source is verified
+        // Get the customer URL from the funding source
+        const customerUrl = destFs.body._links?.customer?.href;
+        if (customerUrl) {
+          try {
+            const customerResponse = await dwollaRequest('get', customerUrl);
+            if (customerResponse.body.status !== 'verified') {
+              return res.status(400).json({
+                error: 'Cannot send to unverified funding source - the customer who owns it is not verified.'
+              });
+            }
+            console.log('[Transfers] Allowing transfer to unverified funding source (customer is verified)');
+          } catch (custErr) {
+            return res.status(400).json({
+              error: 'Could not verify the customer who owns the destination funding source.'
+            });
+          }
+        }
       }
     } catch (err) {
       return res.status(400).json({ error: 'Invalid destination funding source' });
@@ -859,24 +908,90 @@ app.post('/api/transfers', async (req, res) => {
 
 /**
  * GET /api/transfers
- * List all transfers with current status
+ * List all transfers from Dwolla Sandbox
+ *
+ * This fetches ALL transfers from the Dwolla API, including those created
+ * in previous sessions or directly from the Dwolla dashboard.
  */
 app.get('/api/transfers', async (req, res) => {
   try {
-    // Refresh status for all transfers from Dwolla
-    for (let i = 0; i < transfersStore.length; i++) {
-      try {
-        const response = await dwollaRequest('get', transfersStore[i].url);
-        transfersStore[i].status = response.body.status;
-      } catch (err) {
-        console.warn('[Transfers] Failed to refresh status for:', transfersStore[i].id);
-      }
-    }
+    console.log('[Transfers] Fetching all transfers from Dwolla...');
 
-    res.json({ transfers: transfersStore });
+    // First get the account URL
+    const rootResponse = await dwollaRequest('get', '/');
+    const accountUrl = rootResponse.body._links.account.href;
+
+    // DWOLLA API CALL: List all transfers for the account
+    // GET https://api-sandbox.dwolla.com/accounts/{id}/transfers
+    const response = await dwollaRequest('get', `${accountUrl}/transfers?limit=200`);
+
+    const dwollaTransfers = response.body._embedded?.transfers || [];
+
+    // Map Dwolla response to our format with enhanced details
+    const transfers = await Promise.all(dwollaTransfers.map(async (transfer) => {
+      const transferUrl = transfer._links.self.href;
+      const transferId = transferUrl.split('/').pop();
+
+      // Get source and destination funding source URLs
+      const sourceFundingSourceUrl = transfer._links.source?.href || null;
+      const destinationFundingSourceUrl = transfer._links.destination?.href || null;
+
+      // Fetch source funding source details
+      let sourceDetails = null;
+      if (sourceFundingSourceUrl) {
+        try {
+          const sourceResponse = await dwollaRequest('get', sourceFundingSourceUrl);
+          sourceDetails = {
+            id: sourceFundingSourceUrl.split('/').pop(),
+            url: sourceFundingSourceUrl,
+            name: sourceResponse.body.name,
+            type: sourceResponse.body.type,
+            bankName: sourceResponse.body.bankName
+          };
+        } catch (err) {
+          sourceDetails = { url: sourceFundingSourceUrl, name: 'Unknown' };
+        }
+      }
+
+      // Fetch destination funding source details
+      let destinationDetails = null;
+      if (destinationFundingSourceUrl) {
+        try {
+          const destResponse = await dwollaRequest('get', destinationFundingSourceUrl);
+          destinationDetails = {
+            id: destinationFundingSourceUrl.split('/').pop(),
+            url: destinationFundingSourceUrl,
+            name: destResponse.body.name,
+            type: destResponse.body.type,
+            bankName: destResponse.body.bankName
+          };
+        } catch (err) {
+          destinationDetails = { url: destinationFundingSourceUrl, name: 'Unknown' };
+        }
+      }
+
+      return {
+        id: transferId,
+        url: transferUrl,
+        status: transfer.status,
+        amount: transfer.amount,
+        created: transfer.created,
+        sourceFundingSourceUrl,
+        destinationFundingSourceUrl,
+        sourceDetails,
+        destinationDetails
+      };
+    }));
+
+    // Update local store
+    transfersStore = transfers;
+
+    console.log('[Transfers] Found', transfers.length, 'transfers from Dwolla');
+
+    res.json({ transfers });
   } catch (error) {
     console.error('[Transfers] Error listing transfers:', error.message);
-    res.status(500).json({ error: 'Failed to list transfers' });
+    res.status(500).json({ error: 'Failed to list transfers from Dwolla' });
   }
 });
 
@@ -1020,39 +1135,78 @@ app.delete('/api/webhooks', (req, res) => {
 
 /**
  * GET /api/customers/eligible
- * Get customers eligible for payouts (verified + has verified funding source)
+ * Get customers eligible for payouts
+ *
+ * Query parameters:
+ * - includeUnverified=true: Include unverified funding sources for verified customers
+ *
+ * Per Dwolla documentation, verified customers can receive payments to unverified
+ * funding sources (micro-deposits will be used to verify the account).
  */
 app.get('/api/customers/eligible', async (req, res) => {
   try {
+    const includeUnverified = req.query.includeUnverified === 'true';
+
+    console.log('[Eligible] Fetching eligible customers, includeUnverified:', includeUnverified);
+
+    // First, fetch all customers from Dwolla to ensure we have the latest
+    const customersResponse = await dwollaRequest('get', 'customers?limit=200');
+    const allCustomers = customersResponse.body._embedded?.customers || [];
+
     const eligibleCustomers = [];
 
-    for (const customer of customersStore) {
+    for (const dwollaCustomer of allCustomers) {
       // Skip if customer not verified
-      if (customer.status !== 'verified') {
+      if (dwollaCustomer.status !== 'verified') {
         continue;
       }
 
-      // Check for verified funding sources
-      try {
-        const fsResponse = await dwollaRequest('get', `${customer.url}/funding-sources`);
-        const verifiedSources = fsResponse.body._embedded['funding-sources']
-          .filter(fs => !fs.removed && fs.status === 'verified');
+      const customerUrl = dwollaCustomer._links.self.href;
+      const customerId = customerUrl.split('/').pop();
 
-        if (verifiedSources.length > 0) {
+      // Check for funding sources
+      try {
+        const fsResponse = await dwollaRequest('get', `${customerUrl}/funding-sources`);
+        const allSources = fsResponse.body._embedded['funding-sources']
+          .filter(fs => !fs.removed);
+
+        // Filter funding sources based on includeUnverified flag
+        let eligibleSources;
+        if (includeUnverified) {
+          // Include all non-removed funding sources (both verified and unverified)
+          eligibleSources = allSources;
+        } else {
+          // Only include verified funding sources
+          eligibleSources = allSources.filter(fs => fs.status === 'verified');
+        }
+
+        if (eligibleSources.length > 0) {
           eligibleCustomers.push({
-            ...customer,
-            fundingSources: verifiedSources.map(fs => ({
+            id: customerId,
+            url: customerUrl,
+            firstName: dwollaCustomer.firstName,
+            lastName: dwollaCustomer.lastName,
+            email: dwollaCustomer.email,
+            phone: dwollaCustomer.phone || null,
+            type: dwollaCustomer.type || 'personal',
+            status: dwollaCustomer.status,
+            fundingSources: eligibleSources.map(fs => ({
               id: fs._links.self.href.split('/').pop(),
               url: fs._links.self.href,
               name: fs.name,
-              status: fs.status
+              type: fs.type,
+              bankAccountType: fs.bankAccountType,
+              status: fs.status,
+              bankName: fs.bankName
             }))
           });
         }
       } catch (err) {
-        console.warn('[Eligible] Failed to check funding sources for:', customer.id);
+        console.warn('[Eligible] Failed to check funding sources for:', customerId);
       }
     }
+
+    console.log('[Eligible] Found', eligibleCustomers.length, 'eligible customers');
 
     res.json({ customers: eligibleCustomers });
   } catch (error) {

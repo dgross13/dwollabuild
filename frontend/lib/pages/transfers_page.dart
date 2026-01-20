@@ -202,6 +202,8 @@ class _TransferCard extends StatelessWidget {
     final status = transfer['status'] ?? 'unknown';
     final amount = transfer['amount'];
     final created = transfer['created'];
+    final sourceDetails = transfer['sourceDetails'];
+    final destinationDetails = transfer['destinationDetails'];
 
     Color statusColor;
     IconData statusIcon;
@@ -307,6 +309,48 @@ class _TransferCard extends StatelessWidget {
               ],
             ),
 
+            const SizedBox(height: 12),
+
+            // Source funding source
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.output, size: 20, color: Colors.grey),
+                const SizedBox(width: 8),
+                Text(
+                  'From: ',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+                Expanded(
+                  child: Text(
+                    _getFundingSourceDisplay(sourceDetails),
+                    style: TextStyle(color: Colors.grey[800]),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // Destination funding source
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.input, size: 20, color: Colors.grey),
+                const SizedBox(width: 8),
+                Text(
+                  'To: ',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+                Expanded(
+                  child: Text(
+                    _getFundingSourceDisplay(destinationDetails),
+                    style: TextStyle(color: Colors.grey[800]),
+                  ),
+                ),
+              ],
+            ),
+
             const SizedBox(height: 8),
 
             // Created timestamp
@@ -328,6 +372,21 @@ class _TransferCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _getFundingSourceDisplay(Map<String, dynamic>? details) {
+    if (details == null) return 'Unknown';
+    final name = details['name'] ?? 'Unknown';
+    final type = details['type'];
+    final bankName = details['bankName'];
+
+    String display = name;
+    if (bankName != null && bankName.isNotEmpty) {
+      display += ' ($bankName)';
+    } else if (type != null) {
+      display += ' ($type)';
+    }
+    return display;
   }
 
   String _truncateId(String? id) {

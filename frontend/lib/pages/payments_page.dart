@@ -1,7 +1,8 @@
 /// Payments Page
 ///
 /// Allows creating transfers (payouts) from master account to customers.
-/// Only shows eligible customers (verified + verified funding source).
+/// Shows eligible customers (verified customers with funding sources).
+/// Toggle available to include unverified funding sources.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -15,16 +16,22 @@ class PaymentsPage extends StatefulWidget {
 }
 
 class _PaymentsPageState extends State<PaymentsPage> {
+  bool _includeUnverified = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = context.read<DwollaProvider>();
-      if (provider.isConfigured) {
-        provider.fetchEligibleCustomers();
-        provider.fetchAccountFundingSources();
-      }
+      _refreshData();
     });
+  }
+
+  void _refreshData() {
+    final provider = context.read<DwollaProvider>();
+    if (provider.isConfigured) {
+      provider.fetchEligibleCustomers(includeUnverified: _includeUnverified);
+      provider.fetchAccountFundingSources();
+    }
   }
 
   @override
@@ -35,12 +42,22 @@ class _PaymentsPageState extends State<PaymentsPage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.sync),
             onPressed: () {
               final provider = context.read<DwollaProvider>();
-              provider.fetchEligibleCustomers();
-              provider.fetchAccountFundingSources();
+              provider.syncCustomersAndFundingSources(includeUnverified: _includeUnverified);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Syncing customers & funding sources from Dwolla...'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
             },
+            tooltip: 'Sync from Dwolla',
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshData,
             tooltip: 'Refresh',
           ),
         ],
@@ -77,10 +94,56 @@ class _PaymentsPageState extends State<PaymentsPage> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Transfer money from your master account to an eligible customer. '
-                  'Customers must be verified and have a verified funding source.',
-                  style: TextStyle(color: Colors.grey),
+                Text(
+                  _includeUnverified
+                      ? 'Transfer money from your master account to an eligible customer. '
+                        'Showing all funding sources (including unverified) for verified customers.'
+                      : 'Transfer money from your master account to an eligible customer. '
+                        'Customers must be verified and have a verified funding source.',
+                  style: const TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+
+                // Toggle for unverified funding sources
+                Card(
+                  color: _includeUnverified ? Colors.blue[50] : Colors.grey[50],
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _includeUnverified ? Icons.toggle_on : Icons.toggle_off,
+                          color: _includeUnverified ? Colors.blue : Colors.grey,
+                          size: 28,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Include unverified funding sources',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              Text(
+                                _includeUnverified
+                                    ? 'Showing all funding sources for verified customers'
+                                    : 'Only showing verified funding sources',
+                                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Switch(
+                          value: _includeUnverified,
+                          onChanged: (value) {
+                            setState(() => _includeUnverified = value);
+                            _refreshData();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 24),
 
@@ -88,6 +151,7 @@ class _PaymentsPageState extends State<PaymentsPage> {
                 _PaymentForm(
                   eligibleCustomers: provider.eligibleCustomers,
                   masterFundingSources: provider.accountFundingSources,
+                  allowUnverified: _includeUnverified,
                 ),
 
                 // Error display
@@ -129,10 +193,12 @@ class _PaymentsPageState extends State<PaymentsPage> {
 class _PaymentForm extends StatefulWidget {
   final List<Map<String, dynamic>> eligibleCustomers;
   final List<Map<String, dynamic>> masterFundingSources;
+  final bool allowUnverified;
 
   const _PaymentForm({
     required this.eligibleCustomers,
     required this.masterFundingSources,
+    this.allowUnverified = false,
   });
 
   @override
@@ -197,6 +263,7 @@ class _PaymentFormState extends State<_PaymentForm> {
       sourceFundingSourceUrl: _selectedMasterFundingSource!['url'],
       destinationFundingSourceUrl: _selectedCustomerFundingSource!['url'],
       amount: amount,
+      allowUnverified: widget.allowUnverified,
     );
 
     setState(() => _isProcessing = false);
@@ -333,9 +400,29 @@ class _PaymentFormState extends State<_PaymentForm> {
                       items: (_selectedCustomer!['fundingSources'] as List?)
                               ?.map<DropdownMenuItem<Map<String, dynamic>>>(
                                   (fs) {
+                            final isVerified = fs['status'] == 'verified';
                             return DropdownMenuItem(
                               value: Map<String, dynamic>.from(fs),
-                              child: Text('${fs['name']} (${fs['status']})'),
+                              child: Row(
+                                children: [
+                                  Expanded(child: Text(fs['name'] ?? 'Unknown')),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: isVerified ? Colors.green[100] : Colors.orange[100],
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      fs['status'] ?? 'unknown',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: isVerified ? Colors.green[700] : Colors.orange[700],
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             );
                           }).toList() ??
                           [],

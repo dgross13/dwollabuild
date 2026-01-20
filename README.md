@@ -31,6 +31,15 @@ This project provides a visual dashboard to learn and experiment with Dwolla's p
                  (API credentials)
 ```
 
+## What's New
+
+### Recent Enhancements
+- **Persistent customer display**: All customers from your Dwolla Sandbox account are now displayed, including those created in previous sessions or directly via the Dwolla dashboard
+- **Persistent transfer history**: All past transfers are fetched from Dwolla API with enhanced details (source/destination funding source names)
+- **Payments to unverified funding sources**: Toggle available to allow payments to unverified bank accounts for verified customers (per Dwolla documentation)
+- **Sync buttons**: Refresh customer and funding source data directly from Dwolla API
+- **Auto-refresh**: Transfers page auto-refreshes every 2-3 seconds to show real-time status updates
+
 ## Prerequisites
 
 - Node.js 18+ and npm
@@ -74,23 +83,29 @@ For macOS: `flutter run -d macos`
 - Automatic OAuth token refresh before every API call
 
 ### Customers Page
+- **View all customers from Dwolla Sandbox** - Shows customers from previous sessions and those created directly in Dwolla dashboard
 - Create personal or business customers
 - Duplicate email/phone validation
 - View customer verification status (unverified, verified, document, retry, suspended)
 - Verify customers with KYC information (SSN, DOB, address)
 - Add bank accounts (funding sources)
 - View customer's funding sources
+- **Sync button** - Refresh all customer data from Dwolla API
 
 ### Payments Page
 - Create transfers from your master account to customers
-- Validation: only shows eligible recipients (verified customer + verified funding source)
+- **Toggle for unverified funding sources** - Enable to show/send to unverified funding sources for verified customers
+- Validation: only shows eligible recipients (verified customers)
 - Select source funding source from your account
 - Clear error messages for failed transfers
+- Funding source status badges (verified/unverified) in dropdown
+- **Sync button** - Refresh customer and funding source data from Dwolla
 
 ### Transfers Page
-- View all transfers with real-time status updates
-- Auto-refreshes every 3 seconds
+- **View all transfers from Dwolla Sandbox** - Shows transfers from previous sessions
+- Auto-refreshes every 2-3 seconds
 - Status tracking: pending, processed, failed, cancelled
+- **Enhanced transfer details** - Shows source and destination funding source names
 
 ### Webhooks Page
 - View all webhook events received from Dwolla
@@ -156,12 +171,13 @@ In sandbox, transfers process immediately. In production, ACH transfers take 1-5
 
 ### Customers
 - `POST /api/customers` - Create a customer
-- `GET /api/customers` - List all customers
+- `GET /api/customers` - **Fetch all customers from Dwolla API** (shows previous sessions' customers)
 - `GET /api/customers/:id` - Get customer details
 - `POST /api/customers/:id/verify` - Submit KYC verification
 - `POST /api/customers/:id/funding-sources` - Add funding source
 - `GET /api/customers/:id/funding-sources` - List funding sources
 - `GET /api/customers/eligible` - List customers eligible for payouts
+  - Query param: `?includeUnverified=true` - Include unverified funding sources for verified customers
 
 ### Master Account
 - `GET /api/me` - Get account info
@@ -170,7 +186,8 @@ In sandbox, transfers process immediately. In production, ACH transfers take 1-5
 
 ### Transfers
 - `POST /api/transfers` - Create a transfer
-- `GET /api/transfers` - List all transfers
+  - Body param: `allowUnverified: true` - Allow transfers to unverified funding sources (if customer is verified)
+- `GET /api/transfers` - **Fetch all transfers from Dwolla API** (shows previous sessions' transfers with source/destination details)
 - `GET /api/transfers/:id` - Get transfer details
 
 ### Webhooks
@@ -230,7 +247,17 @@ This is a **learning tool** for sandbox only. For production:
 
 ### "Customer not eligible for payout"
 - Customer must have status "verified"
-- Customer must have at least one "verified" funding source
+- By default, customer must have at least one "verified" funding source
+- **To pay to unverified funding sources**: Enable the "Include unverified funding sources" toggle on the Payments page
+
+### "Destination funding source is not verified"
+- This error occurs when trying to pay to an unverified funding source
+- Solution: Enable the "Include unverified funding sources" toggle on the Payments page
+- Note: The customer who owns the funding source must still be verified
+
+### "Customers/transfers not showing up"
+- Click the Sync button (refresh icon with circular arrows) to fetch fresh data from Dwolla
+- Previously created customers and transfers from other sessions will appear after syncing
 
 ## Learn More
 

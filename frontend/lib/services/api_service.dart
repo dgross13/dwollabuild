@@ -166,9 +166,14 @@ class ApiService {
     }
   }
 
-  /// Get customers eligible for payouts (verified + verified funding source)
-  Future<List<Map<String, dynamic>>> getEligibleCustomers() async {
-    final response = await http.get(Uri.parse('$baseUrl/customers/eligible'));
+  /// Get customers eligible for payouts
+  ///
+  /// [includeUnverified] - If true, includes unverified funding sources for verified customers
+  Future<List<Map<String, dynamic>>> getEligibleCustomers({bool includeUnverified = false}) async {
+    final url = includeUnverified
+        ? '$baseUrl/customers/eligible?includeUnverified=true'
+        : '$baseUrl/customers/eligible';
+    final response = await http.get(Uri.parse(url));
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -281,11 +286,15 @@ class ApiService {
   // --------------------------------------------------------------------------
 
   /// Create a transfer (payout)
+  ///
+  /// [allowUnverified] - If true, allows transfers to unverified funding sources
+  /// (as long as the customer is verified)
   Future<Map<String, dynamic>> createTransfer({
     required String sourceFundingSourceUrl,
     required String destinationFundingSourceUrl,
     required double amount,
     String currency = 'USD',
+    bool allowUnverified = false,
   }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/transfers'),
@@ -295,6 +304,7 @@ class ApiService {
         'destinationFundingSourceUrl': destinationFundingSourceUrl,
         'amount': amount,
         'currency': currency,
+        'allowUnverified': allowUnverified,
       }),
     );
 

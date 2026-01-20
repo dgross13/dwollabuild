@@ -244,9 +244,11 @@ class DwollaProvider extends ChangeNotifier {
   }
 
   /// Fetch eligible customers (verified + verified funding source)
-  Future<void> fetchEligibleCustomers() async {
+  ///
+  /// [includeUnverified] - If true, includes unverified funding sources for verified customers
+  Future<void> fetchEligibleCustomers({bool includeUnverified = false}) async {
     try {
-      _eligibleCustomers = await _api.getEligibleCustomers();
+      _eligibleCustomers = await _api.getEligibleCustomers(includeUnverified: includeUnverified);
       notifyListeners();
     } catch (e) {
       _setError(e.toString());
@@ -268,10 +270,13 @@ class DwollaProvider extends ChangeNotifier {
   }
 
   /// Create a transfer (payout)
+  ///
+  /// [allowUnverified] - If true, allows transfers to unverified funding sources
   Future<bool> createTransfer({
     required String sourceFundingSourceUrl,
     required String destinationFundingSourceUrl,
     required double amount,
+    bool allowUnverified = false,
   }) async {
     _setLoading(true);
     _clearError();
@@ -281,6 +286,7 @@ class DwollaProvider extends ChangeNotifier {
         sourceFundingSourceUrl: sourceFundingSourceUrl,
         destinationFundingSourceUrl: destinationFundingSourceUrl,
         amount: amount,
+        allowUnverified: allowUnverified,
       );
       // Refresh transfers list
       await fetchTransfers();
@@ -365,6 +371,32 @@ class DwollaProvider extends ChangeNotifier {
       fetchAccountFundingSources(),
       fetchAccountBalance(),
     ]);
+  }
+
+  // --------------------------------------------------------------------------
+  // Sync Methods
+  // --------------------------------------------------------------------------
+
+  /// Sync all customers and funding sources from Dwolla
+  /// This fetches fresh data from the Dwolla API
+  Future<void> syncCustomersAndFundingSources({bool includeUnverified = false}) async {
+    _setLoading(true);
+    _clearError();
+
+    try {
+      // Fetch all customers from Dwolla
+      await fetchCustomers();
+
+      // Fetch eligible customers (with or without unverified funding sources)
+      await fetchEligibleCustomers(includeUnverified: includeUnverified);
+
+      // Refresh account funding sources
+      await fetchAccountFundingSources();
+    } catch (e) {
+      _setError(e.toString());
+    } finally {
+      _setLoading(false);
+    }
   }
 
   // --------------------------------------------------------------------------

@@ -36,9 +36,23 @@ class _CustomersPageState extends State<CustomersPage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
+            icon: const Icon(Icons.sync),
+            onPressed: () {
+              final provider = context.read<DwollaProvider>();
+              provider.syncCustomersAndFundingSources();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Syncing all customers from Dwolla...'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            tooltip: 'Sync from Dwolla',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
-              context.read<DwollaProvider>().fetchCustomers(refresh: true);
+              context.read<DwollaProvider>().fetchCustomers();
             },
             tooltip: 'Refresh customers',
           ),
